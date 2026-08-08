@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>倒计时</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="public-page theme-dark-orange" id="page">
+    <h1>倒计时</h1>
+    <div class="timer" id="timer" aria-live="off"></div>
+    <div class="danmaku-layer" id="danmaku-layer"></div>
+    <div class="frame-layer" id="frame-layer" hidden><pre id="frame-pre"></pre></div>
+
+    <div class="place-layer" id="place-layer" hidden>
+      <div class="place-preview" id="place-preview"></div>
+      <div class="place-panel">
+        <label class="place-duration">
+          固定时长
+          <input id="place-seconds" type="number" min="0.1" max="10" step="0.1" value="3">
+          秒
+        </label>
+        <span class="place-hint">拖动弹幕到目标位置</span>
+        <button type="button" id="place-confirm">确认发送</button>
+        <button type="button" id="place-cancel" class="ghost">取消</button>
+      </div>
+    </div>
+
+    <form class="message-form" id="message-form">
+      <textarea id="content" placeholder="说点什么..." rows="1"></textarea>
+      <button type="submit" id="send-btn">发送</button>
+      <button type="button" id="advanced-btn" hidden>高级弹幕</button>
+    </form>
+    <div class="notice" id="notice" hidden></div>
+    <div class="qr-corner">
+      <div class="qr-label">扫码发送弹幕</div>
+      <img class="qr-code" src="/qr-code.svg" alt="扫码打开 http://172.30.30.209/">
+      <div class="qr-ip">172.30.30.209</div>
+    </div>
+    <button class="theme-toggle" id="theme-toggle" type="button">切换为橙底白字</button>
+    <button class="fullscreen" id="fullscreen" type="button" aria-label="全屏">⛶</button>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
