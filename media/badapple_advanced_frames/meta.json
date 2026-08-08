@@ -1,0 +1,11 @@
+{
+  "video": "/mnt/data/moonshot_badapple/media/badapple.mp4",
+  "fps": 10.0,
+  "width_chars": 56,
+  "height_chars": 20,
+  "threshold": 128,
+  "invert": false,
+  "x": 50.0,
+  "y": 45.0,
+  "mode": "fixed"
+}
