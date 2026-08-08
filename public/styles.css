@@ -1,7 +1,37 @@
 *{box-sizing:border-box}
 body{margin:0;background:#000;color:#ff6200;font-family:Courier New,monospace}
-.public-page{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden;background:#000;color:#ff6200;transition:background-color .2s,color .2s}
+.public-page{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden;background:#000;color:#ff6200;transition:background-color .2s,color .2s;position:relative}
 .public-page.theme-orange-white{background:#ff6200;color:#fff}
+.clock-bg{
+  position:fixed;
+  inset:0;
+  z-index:0;
+  background-position:center;
+  background-size:cover;
+  background-repeat:no-repeat;
+  pointer-events:none;
+}
+.clock-bg:after{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:#00000066;
+}
+.public-page > h1,
+.public-page > .timer{position:relative;z-index:2}
+.spectrum-danmaku{
+  position:fixed;
+  left:50%;
+  bottom:18vh;
+  transform:translateX(-50%);
+  z-index:2;
+  pointer-events:none;
+  color:#fff;
+  font:clamp(.9rem,2.2vw,1.6rem)/1 "Courier New",monospace;
+  white-space:pre;
+  text-shadow:0 0 8px #000;
+  letter-spacing:.05em;
+}
 .public-page h1{font-size:clamp(2rem,5vw,4rem)}
 .qr-corner{
   position:fixed;
@@ -175,6 +205,7 @@ html.is-fullscreen h1,
 :-webkit-full-screen h1{
   display:none !important;
 }
+/* 全屏仍保留频谱弹幕、背景、计时、二维码 */
 html.is-fullscreen .fullscreen,
 :fullscreen .fullscreen,
 :-webkit-full-screen .fullscreen{

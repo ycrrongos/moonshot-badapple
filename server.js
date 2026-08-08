@@ -6,6 +6,8 @@ import { execFileSync } from "child_process";
 import { networkInterfaces } from "os";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import multer from "multer";
+import { createMediaHub } from "./lib/mediaHub.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, "public");
@@ -71,7 +73,51 @@ refreshQrTargets();
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
-app.use(express.static(join(__dirname, "public")));
+
+let mediaHub;
+const upload = multer({
+  dest: join(__dirname, "uploads", "_tmp"),
+  limits: { fileSize: 200 * 1024 * 1024 },
+});
+
+function ingestFixedFrame(content, { x = 50, y = 45, durationMs = 130 } = {}) {
+  const message = {
+    id: randomUUID(),
+    content,
+    createdAt: Date.now(),
+    mode: "fixed",
+    durationMs: Math.min(10000, Math.max(100, durationMs)),
+    x,
+    y,
+  };
+  state.active.set(message.id, message);
+  scheduleExpiry(message);
+  broadcast({ type: "fixed", message: publicMessage(message) });
+  return message;
+}
+
+function clearActiveDanmaku() {
+  for (const id of [...state.active.keys()]) forgetMessage(id, false);
+  state.frame = null;
+  broadcast({ type: "clear" });
+}
+
+mediaHub = createMediaHub({
+  rootDir: __dirname,
+  broadcast: (payload) => broadcast(payload),
+  ingestFixedFrame,
+  clearDanmaku: clearActiveDanmaku,
+});
+
+app.get("/haha", (_req, res) => {
+  res.sendFile(join(publicDir, "haha.html"));
+});
+app.get("/haha/", (_req, res) => {
+  res.sendFile(join(publicDir, "haha.html"));
+});
+
+app.use("/uploads", express.static(join(__dirname, "uploads")));
+app.use(express.static(publicDir));
 
 function publicMessage(msg) {
   return {
@@ -116,7 +162,79 @@ app.get("/api/config", (_req, res) => {
     localIp: state.localIp,
     qrRotateMs: state.qrRotateMs,
     qrTargets: state.qrTargets,
+    media: mediaHub.mediaSnapshot(),
   });
+});
+
+app.get("/api/haha/media", (_req, res) => {
+  res.json(mediaHub.mediaSnapshot());
+});
+
+app.post("/api/haha/upload/video", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "请上传视频文件" });
+    const entry = await mediaHub.addVideo(req.file);
+    res.status(201).json({ ok: true, video: entry });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+app.post("/api/haha/upload/music", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "请上传音频文件" });
+    const entry = await mediaHub.addMusic(req.file);
+    res.status(201).json({ ok: true, music: entry });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+app.post("/api/haha/upload/background", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "请上传图片" });
+    const entry = await mediaHub.addBackground(req.file);
+    res.status(201).json({ ok: true, background: entry });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+app.post("/api/haha/play/video", async (req, res) => {
+  try {
+    const playback = await mediaHub.playVideo(req.body?.id, {
+      withAudio: req.body?.withAudio !== false,
+      spectrum: Boolean(req.body?.spectrum),
+    });
+    res.json({ ok: true, playback });
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
+});
+
+app.post("/api/haha/play/music", (req, res) => {
+  try {
+    const playback = mediaHub.playMusic(req.body?.id, {
+      spectrum: req.body?.spectrum !== false,
+    });
+    res.json({ ok: true, playback });
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
+});
+
+app.post("/api/haha/stop", (_req, res) => {
+  mediaHub.stopPlayback();
+  res.json({ ok: true });
+});
+
+app.post("/api/haha/background", (req, res) => {
+  try {
+    const url = mediaHub.setBackground(req.body?.id || null);
+    res.json({ ok: true, backgroundUrl: url });
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
 });
 
 app.post("/api/config", (req, res) => {
@@ -227,6 +345,7 @@ wss.on("connection", (socket) => {
       config: { targetTime: state.targetTime, theme: state.theme },
       messages: [...state.active.values()].map(publicMessage),
       frame: state.frame ? publicMessage(state.frame) : null,
+      media: mediaHub.mediaSnapshot(),
     }),
   );
 });
@@ -332,8 +451,12 @@ function connectRemoteLive() {
   setInterval(pollRemoteHistory, REMOTE_POLL_MS);
 }
 
+await mediaHub.ensureDirs();
+await import("fs/promises").then((fs) => fs.mkdir(join(__dirname, "uploads", "_tmp"), { recursive: true }));
+
 server.listen(PORT, () => {
   console.log(`local countdown: http://127.0.0.1:${PORT}`);
+  console.log(`haha panel: http://127.0.0.1:${PORT}/haha`);
   console.log(`[qr] rotate every ${QR_ROTATE_MS}ms: ${state.qrTargets.map((t) => t.ip).join(" ↔ ")}`);
   // 网卡变化时刷新本地二维码
   setInterval(() => {

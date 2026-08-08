@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HAHA 控制台</title>
+  <link rel="stylesheet" href="/haha.css">
+</head>
+<body>
+  <main class="panel">
+    <header>
+      <h1>HAHA</h1>
+      <p>上传视频转弹幕、放音乐、换时钟背景。音频在倒计时页播放。</p>
+      <a class="link" href="/" target="_blank" rel="noopener">打开时钟页</a>
+    </header>
+
+    <section>
+      <h2>视频 → 弹幕</h2>
+      <label class="file">
+        <span>选择视频</span>
+        <input id="video-file" type="file" accept="video/*">
+      </label>
+      <button id="video-upload" type="button">上传并转换</button>
+      <p class="hint" id="video-status">支持 mp4 / webm / mkv，转换需要一些时间。</p>
+      <div id="video-list" class="list"></div>
+    </section>
+
+    <section>
+      <h2>音乐</h2>
+      <label class="file">
+        <span>选择音频</span>
+        <input id="music-file" type="file" accept="audio/*">
+      </label>
+      <label class="check"><input id="music-spectrum" type="checkbox" checked> 弹幕显示频谱</label>
+      <button id="music-upload" type="button">上传音乐</button>
+      <div id="music-list" class="list"></div>
+    </section>
+
+    <section>
+      <h2>时钟背景</h2>
+      <label class="file">
+        <span>选择图片</span>
+        <input id="bg-file" type="file" accept="image/*">
+      </label>
+      <button id="bg-upload" type="button">上传背景</button>
+      <button id="bg-clear" type="button" class="ghost">清除背景</button>
+      <div id="bg-list" class="list"></div>
+    </section>
+
+    <section class="transport">
+      <h2>播放控制</h2>
+      <button id="stop-all" type="button" class="danger">停止播放</button>
+      <pre id="now-playing">未在播放</pre>
+    </section>
+  </main>
+  <script type="module" src="/haha.js"></script>
+</body>
+</html>

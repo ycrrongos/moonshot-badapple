@@ -8,10 +8,13 @@
 </head>
 <body>
   <main class="public-page theme-dark-orange" id="page">
+    <div class="clock-bg" id="clock-bg" hidden></div>
     <h1>倒计时</h1>
     <div class="timer" id="timer" aria-live="off"></div>
     <div class="danmaku-layer" id="danmaku-layer"></div>
+    <div class="spectrum-danmaku" id="spectrum-danmaku" hidden></div>
     <div class="frame-layer" id="frame-layer" hidden><pre id="frame-pre"></pre></div>
+    <audio id="clock-audio" preload="auto"></audio>
 
     <div class="place-layer" id="place-layer" hidden>
       <div class="place-preview" id="place-preview"></div>

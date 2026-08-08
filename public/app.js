@@ -24,6 +24,9 @@ const placeConfirm = document.getElementById("place-confirm");
 const placeCancel = document.getElementById("place-cancel");
 const qrCodeEl = document.getElementById("qr-code");
 const qrIpEl = document.getElementById("qr-ip");
+const clockBg = document.getElementById("clock-bg");
+const clockAudio = document.getElementById("clock-audio");
+const spectrumEl = document.getElementById("spectrum-danmaku");
 
 let targetTime = Date.now() + 3600_000;
 let theme = localStorage.getItem("countdown-theme") || "dark-orange";
@@ -40,6 +43,124 @@ let qrTargets = [
 let qrIndex = 0;
 let qrRotateMs = 30_000;
 let qrTimer = null;
+let spectrumEnabled = false;
+let audioCtx = null;
+let analyser = null;
+let spectrumRaf = 0;
+let mediaSourceNode = null;
+
+const SPECTRUM_BARS = 48;
+const SPECTRUM_CHARS = "▁▂▃▄▅▆▇█";
+
+function applyBackground(url) {
+  if (!url) {
+    clockBg.hidden = true;
+    clockBg.style.backgroundImage = "";
+    return;
+  }
+  clockBg.hidden = false;
+  clockBg.style.backgroundImage = `url("${url}")`;
+}
+
+function ensureAudioGraph() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (!mediaSourceNode) {
+    mediaSourceNode = audioCtx.createMediaElementSource(clockAudio);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.75;
+    mediaSourceNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+  }
+  return audioCtx;
+}
+
+function stopSpectrumLoop() {
+  spectrumEnabled = false;
+  spectrumEl.hidden = true;
+  spectrumEl.textContent = "";
+  if (spectrumRaf) cancelAnimationFrame(spectrumRaf);
+  spectrumRaf = 0;
+}
+
+function drawSpectrum() {
+  if (!spectrumEnabled || !analyser) return;
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(data);
+  let line = "";
+  for (let i = 0; i < SPECTRUM_BARS; i += 1) {
+    const idx = Math.floor((i / SPECTRUM_BARS) * data.length * 0.7);
+    const v = data[idx] / 255;
+    const level = Math.min(SPECTRUM_CHARS.length - 1, Math.floor(v * SPECTRUM_CHARS.length));
+    line += SPECTRUM_CHARS[level];
+  }
+  spectrumEl.hidden = false;
+  spectrumEl.textContent = line;
+  spectrumRaf = requestAnimationFrame(drawSpectrum);
+}
+
+async function playClockAudio(url, { spectrum = false } = {}) {
+  if (!url) {
+    clockAudio.pause();
+    clockAudio.removeAttribute("src");
+    stopSpectrumLoop();
+    return;
+  }
+  ensureAudioGraph();
+  if (audioCtx.state === "suspended") await audioCtx.resume();
+  if (clockAudio.src !== new URL(url, location.href).href) {
+    clockAudio.src = url;
+  }
+  try {
+    await clockAudio.play();
+  } catch (err) {
+    console.warn("audio play blocked", err);
+    showNotice("浏览器拦截了自动播放，请点一下页面后再试");
+  }
+  stopSpectrumLoop();
+  if (spectrum) {
+    spectrumEnabled = true;
+    drawSpectrum();
+  }
+}
+
+function stopClockAudio() {
+  clockAudio.pause();
+  clockAudio.removeAttribute("src");
+  stopSpectrumLoop();
+}
+
+function applyMediaState(media) {
+  if (!media) return;
+  applyBackground(media.backgroundUrl || null);
+  const p = media.playback || {};
+  if (p.kind && p.withAudio && p.audioUrl) {
+    playClockAudio(p.audioUrl, { spectrum: Boolean(p.spectrum) });
+  } else if (!p.kind) {
+    stopClockAudio();
+  } else if (p.kind && !p.withAudio) {
+    stopClockAudio();
+    if (p.spectrum) {
+      // 无音频时不画频谱
+      stopSpectrumLoop();
+    }
+  }
+}
+
+function handleMediaEvent(data) {
+  if (data.backgroundUrl !== undefined) applyBackground(data.backgroundUrl || null);
+  if (data.action === "play") {
+    playClockAudio(data.withAudio ? data.audioUrl : null, { spectrum: Boolean(data.spectrum) });
+  } else if (data.action === "stop") {
+    stopClockAudio();
+  } else if (data.action === "background") {
+    applyBackground(data.backgroundUrl || null);
+  } else if (data.media) {
+    applyMediaState(data.media);
+  }
+}
 
 function applyQrTarget(index) {
   if (!qrTargets.length) return;
@@ -228,6 +349,7 @@ async function bootstrap() {
       applyTheme(cfg.theme === "orange-white" ? "orange-white" : "dark-orange");
     }
     startQrRotation(cfg.qrTargets, cfg.qrRotateMs);
+    if (cfg.media) applyMediaState(cfg.media);
   } catch (err) {
     showNotice(err.message);
     startQrRotation(qrTargets, qrRotateMs);
@@ -268,12 +390,14 @@ function connectLive() {
         if (Array.isArray(data.messages)) data.messages.forEach(applyLiveMessage);
         if (data.frame) showFrame(data.frame);
         if (data.config?.targetTime) targetTime = Date.parse(data.config.targetTime);
+        if (data.media) applyMediaState(data.media);
       }
       if (data.type === "danmaku") spawnDanmaku(data.message);
       if (data.type === "fixed") spawnFixed(data.message);
       if (data.type === "frame") showFrame(data.message);
       if (data.type === "danmaku_deleted") removeNode(data.id, false);
       if (data.type === "clear") clearAll();
+      if (data.type === "media") handleMediaEvent(data);
       if (data.type === "config" && data.config?.targetTime) {
         targetTime = Date.parse(data.config.targetTime);
       }
@@ -371,6 +495,20 @@ fullscreenBtn.addEventListener("click", () => {
 });
 document.addEventListener("fullscreenchange", syncFullscreenClass);
 syncFullscreenClass();
+
+// 解锁自动播放：用户首次交互后 resume AudioContext
+["pointerdown", "keydown"].forEach((evt) => {
+  window.addEventListener(
+    evt,
+    () => {
+      if (audioCtx?.state === "suspended") audioCtx.resume();
+      if (clockAudio.src && clockAudio.paused && spectrumEnabled) {
+        clockAudio.play().catch(() => {});
+      }
+    },
+    { once: true },
+  );
+});
 
 bindPlacementDrag();
 setInterval(() => renderTimer(Math.max(0, targetTime - Date.now())), 10);
