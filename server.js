@@ -1,12 +1,57 @@
 import express from "express";
 import { createServer } from "http";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
+import { execFileSync } from "child_process";
+import { networkInterfaces } from "os";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const publicDir = join(__dirname, "public");
 const PORT = Number(process.env.PORT) || 80;
+const REMOTE_HOST = (process.env.REMOTE_HOST || "http://46.62.212.36").replace(/\/$/, "");
+const REMOTE_IP = REMOTE_HOST.replace(/^https?:\/\//, "").split("/")[0];
+const REMOTE_RELAY = process.env.REMOTE_RELAY !== "0";
+const REMOTE_POLL_MS = Math.max(2000, Number(process.env.REMOTE_POLL_MS) || 5000);
+const QR_ROTATE_MS = Math.max(5000, Number(process.env.QR_ROTATE_MS) || 30_000);
+
+function detectLocalIp() {
+  if (process.env.LOCAL_IP) return process.env.LOCAL_IP;
+  const nets = networkInterfaces();
+  const found = [];
+  for (const list of Object.values(nets)) {
+    for (const net of list || []) {
+      if (net.family !== "IPv4" || net.internal) continue;
+      found.push(net.address);
+    }
+  }
+  return found.find((ip) => ip.startsWith("172.30."))
+    || found.find((ip) => ip.startsWith("172."))
+    || found[0]
+    || "127.0.0.1";
+}
+
+function writeQrSvg(filename, url) {
+  try {
+    execFileSync("qrencode", ["-t", "SVG", "-o", join(publicDir, filename), url], { stdio: "ignore" });
+  } catch (err) {
+    console.warn(`[qr] qrencode failed for ${url}:`, err?.message || err);
+  }
+}
+
+function refreshQrTargets() {
+  const localIp = detectLocalIp();
+  writeQrSvg("qr-remote.svg", `http://${REMOTE_IP}/`);
+  writeQrSvg("qr-local.svg", `http://${localIp}/`);
+  writeQrSvg("qr-code.svg", `http://${REMOTE_IP}/`);
+  state.qrTargets = [
+    { ip: REMOTE_IP, qr: "/qr-remote.svg", label: "remote" },
+    { ip: localIp, qr: "/qr-local.svg", label: "local" },
+  ];
+  state.localIp = localIp;
+  return state.qrTargets;
+}
 
 const state = {
   targetTime: process.env.TARGET_TIME || "2026-08-09T06:30:00.000Z",
@@ -15,7 +60,14 @@ const state = {
   active: new Map(),
   timers: new Map(),
   frame: null,
+  remoteSeen: new Set(),
+  remoteStatus: { enabled: REMOTE_RELAY, host: REMOTE_HOST, connected: false, lastError: null },
+  localIp: "127.0.0.1",
+  qrTargets: [],
+  qrRotateMs: QR_ROTATE_MS,
 };
+
+refreshQrTargets();
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -57,7 +109,14 @@ function scheduleExpiry(message) {
 }
 
 app.get("/api/config", (_req, res) => {
-  res.json({ targetTime: state.targetTime, theme: state.theme });
+  res.json({
+    targetTime: state.targetTime,
+    theme: state.theme,
+    remote: state.remoteStatus,
+    localIp: state.localIp,
+    qrRotateMs: state.qrRotateMs,
+    qrTargets: state.qrTargets,
+  });
 });
 
 app.post("/api/config", (req, res) => {
@@ -172,6 +231,120 @@ wss.on("connection", (socket) => {
   );
 });
 
+function rememberRemoteId(id) {
+  if (!id || state.remoteSeen.has(id)) return false;
+  state.remoteSeen.add(id);
+  if (state.remoteSeen.size > 5000) {
+    const drop = [...state.remoteSeen].slice(0, 1000);
+    for (const key of drop) state.remoteSeen.delete(key);
+  }
+  return true;
+}
+
+/** 把原站弹幕灌进本地队列并广播（不落盘，播完即删） */
+function ingestRemoteMessage(remote, { durationMs = 10000 } = {}) {
+  if (!remote?.content || !String(remote.content).trim()) return false;
+  const remoteId = remote.id || `${remote.createdAt}:${remote.content}`;
+  if (!rememberRemoteId(remoteId)) return false;
+
+  const message = {
+    id: randomUUID(),
+    content: String(remote.content),
+    createdAt: remote.createdAt || Date.now(),
+    mode: "danmaku",
+    durationMs,
+    lane: undefined,
+    x: undefined,
+    y: undefined,
+    source: "remote",
+    remoteId,
+  };
+  state.active.set(message.id, message);
+  scheduleExpiry(message);
+  broadcast({ type: "danmaku", message: publicMessage(message) });
+  return true;
+}
+
+async function pollRemoteHistory() {
+  try {
+    const res = await fetch(`${REMOTE_HOST}/api/messages?limit=30`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const messages = Array.isArray(data.messages) ? data.messages : [];
+    // 原站列表是新→旧；从旧到新灌入，避免首屏顺序颠倒
+    let n = 0;
+    for (const msg of messages.slice().reverse()) {
+      if (ingestRemoteMessage(msg)) n += 1;
+    }
+    if (n) console.log(`[remote] polled ${n} new message(s)`);
+    state.remoteStatus.lastError = null;
+  } catch (err) {
+    state.remoteStatus.lastError = String(err?.message || err);
+  }
+}
+
+function connectRemoteLive() {
+  const wsUrl = REMOTE_HOST.replace(/^http/, "ws") + "/api/live";
+  let socket;
+  let retryTimer;
+  let closed = false;
+
+  const scheduleRetry = () => {
+    if (closed) return;
+    state.remoteStatus.connected = false;
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(open, 1500);
+  };
+
+  const open = () => {
+    socket = new WebSocket(wsUrl);
+    socket.on("open", () => {
+      state.remoteStatus.connected = true;
+      state.remoteStatus.lastError = null;
+      console.log(`[remote] live connected ${wsUrl}`);
+      pollRemoteHistory();
+    });
+    socket.on("message", (raw) => {
+      try {
+        const data = JSON.parse(String(raw));
+        if (data.type === "danmaku" && data.message) {
+          ingestRemoteMessage(data.message);
+        } else if (data.type === "danmaku_deleted" && data.id) {
+          // 原站删了也不强行清本地；本地仍按飞行时长过期
+          rememberRemoteId(data.id);
+        }
+      } catch (err) {
+        console.error("[remote] bad event", err);
+      }
+    });
+    socket.on("close", scheduleRetry);
+    socket.on("error", (err) => {
+      state.remoteStatus.lastError = String(err?.message || err);
+      try {
+        socket.close();
+      } catch {
+        /* ignore */
+      }
+    });
+  };
+
+  open();
+  setInterval(pollRemoteHistory, REMOTE_POLL_MS);
+}
+
 server.listen(PORT, () => {
   console.log(`local countdown: http://127.0.0.1:${PORT}`);
+  console.log(`[qr] rotate every ${QR_ROTATE_MS}ms: ${state.qrTargets.map((t) => t.ip).join(" ↔ ")}`);
+  // 网卡变化时刷新本地二维码
+  setInterval(() => {
+    const prev = state.localIp;
+    refreshQrTargets();
+    if (state.localIp !== prev) console.log(`[qr] local ip → ${state.localIp}`);
+  }, 60_000);
+  if (REMOTE_RELAY) {
+    console.log(`[remote] relaying from ${REMOTE_HOST}`);
+    connectRemoteLive();
+  } else {
+    console.log("[remote] relay disabled (REMOTE_RELAY=0)");
+  }
 });

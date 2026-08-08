@@ -22,6 +22,8 @@ const placePreview = document.getElementById("place-preview");
 const placeSeconds = document.getElementById("place-seconds");
 const placeConfirm = document.getElementById("place-confirm");
 const placeCancel = document.getElementById("place-cancel");
+const qrCodeEl = document.getElementById("qr-code");
+const qrIpEl = document.getElementById("qr-ip");
 
 let targetTime = Date.now() + 3600_000;
 let theme = localStorage.getItem("countdown-theme") || "dark-orange";
@@ -31,6 +33,31 @@ let sending = false;
 let placing = false;
 let placeX = 50;
 let placeY = 40;
+let qrTargets = [
+  { ip: "46.62.212.36", qr: "/qr-remote.svg" },
+  { ip: "172.30.30.209", qr: "/qr-local.svg" },
+];
+let qrIndex = 0;
+let qrRotateMs = 30_000;
+let qrTimer = null;
+
+function applyQrTarget(index) {
+  if (!qrTargets.length) return;
+  qrIndex = ((index % qrTargets.length) + qrTargets.length) % qrTargets.length;
+  const target = qrTargets[qrIndex];
+  const bust = `v=${Date.now()}`;
+  qrCodeEl.src = `${target.qr}?${bust}`;
+  qrCodeEl.alt = `扫码打开 http://${target.ip}/`;
+  qrIpEl.textContent = target.ip;
+}
+
+function startQrRotation(targets, rotateMs) {
+  if (Array.isArray(targets) && targets.length) qrTargets = targets;
+  if (Number.isFinite(rotateMs) && rotateMs >= 1000) qrRotateMs = rotateMs;
+  applyQrTarget(0);
+  if (qrTimer) clearInterval(qrTimer);
+  qrTimer = setInterval(() => applyQrTarget(qrIndex + 1), qrRotateMs);
+}
 
 function applyTheme(next) {
   theme = next;
@@ -200,8 +227,10 @@ async function bootstrap() {
     if (!localStorage.getItem("countdown-theme") && cfg.theme) {
       applyTheme(cfg.theme === "orange-white" ? "orange-white" : "dark-orange");
     }
+    startQrRotation(cfg.qrTargets, cfg.qrRotateMs);
   } catch (err) {
     showNotice(err.message);
+    startQrRotation(qrTargets, qrRotateMs);
   }
 
   // 不拉历史；只在 WebSocket hello 里同步当前仍在显示的弹幕
@@ -330,10 +359,18 @@ themeToggle.addEventListener("click", () => {
   applyTheme(theme === "dark-orange" ? "orange-white" : "dark-orange");
 });
 
+function syncFullscreenClass() {
+  const on = Boolean(document.fullscreenElement);
+  document.documentElement.classList.toggle("is-fullscreen", on);
+  if (on && placing) closePlacement();
+}
+
 fullscreenBtn.addEventListener("click", () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen();
 });
+document.addEventListener("fullscreenchange", syncFullscreenClass);
+syncFullscreenClass();
 
 bindPlacementDrag();
 setInterval(() => renderTimer(Math.max(0, targetTime - Date.now())), 10);
